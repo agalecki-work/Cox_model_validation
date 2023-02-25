@@ -265,8 +265,12 @@ knitr::knit_exit()
 
 
 #' ## Overall performance
+# Cannot find function (S3-method) called predictRisk._coxph
+# Cannot find function (S3-method) called predictRisk.model_fit
+
+
 score_gbsg5 <-
-  riskRegression::Score(list("cox" = efit1),
+  riskRegression::Score(list("cox" = ph_efit1),
                         formula = Surv(ryear, rfs) ~ 1, 
                         data = gbsg5, 
                         conf.int = TRUE, 
@@ -276,7 +280,10 @@ score_gbsg5 <-
                         summary = "ipa"
 )
 
+
 score_gbsg5$Brier$score 
+
+
 
 #' ## Clinical utility
 
