@@ -1,5 +1,5 @@
 #' ---
-#' title: "20_main.R"
+#' title: "25_main-tidy.R"
 #' output:
 #'   rmdformats::readthedown:
 #'     lightbox: true
@@ -7,7 +7,7 @@
 #' ---
 #+ chunk-not-executed, include = FALSE
 # To generate Rmd and html files  execute the line below:
-# s = "20_main.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
+# s = "25_main-tidy.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
 #'
 #' # Intro
 #'
@@ -16,7 +16,7 @@
 #' https://github.com/danielegiardiello/Prediction_performance_survival
 
 # Libraries and options ----------------------------------
-
+rm(list=ls())
 # General packages
 pkgs <- c("survival", "rms", "timeROC", "riskRegression")
 vapply(pkgs, function(pkg) {
@@ -42,13 +42,18 @@ rm(gbsg_, rotterdam_) # not needed
 
 #' # Model development
 
-efit1 <- coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
-               data = rott5, 
-               x = T, 
-               y = T)
+library(tidymodels)
+library(censored)
+tidymodels_prefer()
+  
+ph_spec  <- 
+    proportional_hazards() %>%
+    set_engine("survival") %>% 
+    set_mode("censored regression")
+    
+ph_efit1 <- ph_spec %>% fit(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
+ph_efit1
 
-# The model with additional PGR marker (skipped)
-#--> efit1_pgr  <- update(efit1, . ~ . + pgr2 + pgr3)
 
 
 #' # Validation of the original model
@@ -56,8 +61,10 @@ efit1 <- coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
 #' ## Discrimination
 
 # Add linear predictor in the validation set
-gbsg5$lp <- predict(efit1, newdata = gbsg5)
-
+gbsg5$lp <- - predict(ph_efit1, new_data = gbsg5,
+                   type = "linear_pred")  %>% pull() # Note minus sign
+range(gbsg5$lp)
+gbsg5$lp[1:8]
 
 ### Validation data
 # Harrell's C
@@ -116,11 +123,10 @@ Uno_AUC_res <- c(
 
 Uno_AUC_res
 
-
-
 #' ## Calibration
 
 # Observed / Expected ratio
+
 t_horizon <- 5
 
 # Observed
@@ -130,15 +136,27 @@ obj <- summary(survfit(
   times = t_horizon)
 
 obs_t <- 1 - obj$surv
+range(obs_t)
 
 # Predicted risk 
-gbsg5$pred <- riskRegression::predictRisk(efit1, 
-                                          newdata = gbsg5,
-                                          times = t_horizon)
+
+tmp_tbl  <- predict(ph_efit1, 
+                      type ="survival",
+                      new_data = gbsg5,
+                      time = t_horizon) %>%
+           unnest(.pred)
+tmp <-  tmp_tbl %>% select(.pred_survival) %>% pull()
+
+gbsg5$pred <- 1 -tmp                                         
+range(gbsg5$pred) 
+gbsg5$pred[1:8]
+
 # Expected
 exp_t <- mean(gbsg5$pred)
 
 OE_t <- obs_t / exp_t
+
+
 
 alpha <- .05
 OE_summary <- c(
@@ -151,9 +169,12 @@ OE_summary
 
 
 
-#' ## Calibration plot
-gbsg5$pred.cll <- log(-log(1 - gbsg5$pred))
 
+#' ## Calibration plot
+range(gbsg5$pred)
+gbsg5$pred.cll <- log(-log(1 - gbsg5$pred))
+range(gbsg5$pred.cll)
+gbsg5$pred.cll[1:8]
 
 # Estimate actual risk
 vcal <- rms::cph(Surv(ryear, rfs) ~ rcs(pred.cll, 3),
@@ -226,7 +247,9 @@ numsum_cph <- c(
 numsum_cph
 
 # calibration slope (fixed time point)-------------------------------------
-gval <- coxph(Surv(ryear, rfs) ~ lp, data = gbsg5)
+
+gval <- coxph(Surv(ryear, rfs) ~ lp , data = gbsg5)
+gbsg5$lp[1:8]
 
 calslope_summary <- c(
   "calibration slope" = gval$coef,
@@ -235,6 +258,9 @@ calslope_summary <- c(
 )
 
 calslope_summary
+
+#+ chunk
+knitr::knit_exit()
 
 
 

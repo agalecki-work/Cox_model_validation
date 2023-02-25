@@ -7,8 +7,8 @@
 #' ---
 #+ chunk-not-executed, include = FALSE
 # To generate Rmd and html files  execute the line below:
-# s = "01_predsurv_minimal.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
-#'
+#s = "01_predsurv_minimal.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
+ #'
 #' # Intro
 #'
 #' Code developed by Daniele Giardiello's work posted at:
@@ -16,7 +16,7 @@
 #' https://github.com/danielegiardiello/Prediction_performance_survival
 
 # Libraries and options ----------------------------------
-
+rm(list=ls())
 # General packages
 pkgs <- c("survival", "rms", "timeROC", "riskRegression")
 vapply(pkgs, function(pkg) {
@@ -137,7 +137,8 @@ efit1_pgr  <- update(efit1, . ~ . + pgr2 + pgr3)
 
 # Add linear predictor in the validation set
 gbsg5$lp <- predict(efit1, newdata = gbsg5)
-
+range(gbsg5$lp)
+gbsg5$lp[1:8]
 
 ### Validation data
 # Harrell's C
@@ -210,13 +211,18 @@ obj <- summary(survfit(
   times = t_horizon)
 
 obs_t <- 1 - obj$surv
+range(obs_t)
 
 # Predicted risk 
 gbsg5$pred <- riskRegression::predictRisk(efit1, 
                                           newdata = gbsg5,
                                           times = t_horizon)
+range(gbsg5$pred)
+gbsg5$pred[1:8]
+
 # Expected
 exp_t <- mean(gbsg5$pred)
+exp_t
 
 OE_t <- obs_t / exp_t
 
@@ -307,6 +313,7 @@ numsum_cph
 
 # calibration slope (fixed time point)-------------------------------------
 gval <- coxph(Surv(ryear, rfs) ~ lp, data = gbsg5)
+gbsg5$lp[1:8]
 
 calslope_summary <- c(
   "calibration slope" = gval$coef,
