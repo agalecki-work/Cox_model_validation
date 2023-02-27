@@ -42,6 +42,17 @@ rm(gbsg_, rotterdam_) # not needed
 
 #' # Model development
 
+#' ## Survival
+
+library(survival)
+efit1 <- coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
+               data = rott5, 
+               x = T, 
+               y = T)
+
+
+#' ## Tidy
+
 library(tidymodels)
 library(censored)
 tidymodels_prefer()
@@ -55,24 +66,41 @@ ph_efit1 <- ph_spec %>% fit(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
 ph_efit1
 
 
-
 #' # Validation of the original model
 #'
 #' ## Discrimination
 
-# Add linear predictor in the validation set
-gbsg5$lp <- - predict(ph_efit1, new_data = gbsg5,
-                   type = "linear_pred")  %>% pull() # Note minus sign
+#'* Add linear predictor in the validation set
+#'* See https://www.tidyverse.org/blog/2021/11/survival-analysis-parsnip-adjacent/
+#'* Note: `gbsg5$lp_td` obtained below is different from `gbsg5$lp` obtained using survival package
+#'* Difference is 0.4176962 (tidy minus survival) Ex. 0.5390812-0.1213850
+#'
+#' lp using survival
+gbsg5$lp <-   predict(efit1, newdata = gbsg5)
 range(gbsg5$lp)
 gbsg5$lp[1:8]
 
+#' lp using tidy
+gbsg5$lp_td <- - predict(ph_efit1, new_data = gbsg5,
+                   type = "linear_pred")  %>% pull() # Note minus sign
+
+range(gbsg5$lp_td)
+gbsg5$lp_td[1:8]
+
+#' Cross-check
+diffx <- gbsg5$lp_td - gbsg5$lp
+range(diffx)
+gbsg5$lp <- NULL  # not needed
+
+
+
 ### Validation data
 # Harrell's C
-harrell_C_gbsg5 <- concordance(Surv(ryear, rfs) ~ lp, 
+harrell_C_gbsg5 <- concordance(Surv(ryear, rfs) ~ lp_td, 
                                gbsg5, 
                                reverse = TRUE)
 # Uno's C
-Uno_C_gbsg5 <- concordance(Surv(ryear, rfs) ~ lp, 
+Uno_C_gbsg5 <- concordance(Surv(ryear, rfs) ~ lp_td, 
                            gbsg5, 
                            reverse = TRUE,
                            timewt = "n/G2")
@@ -123,9 +151,8 @@ Uno_AUC_res <- c(
 
 Uno_AUC_res
 
-#' ## Calibration
+#' ## Calibration (Observed / Expected ratio)
 
-# Observed / Expected ratio
 
 t_horizon <- 5
 
@@ -146,6 +173,7 @@ tmp_tbl  <- predict(ph_efit1,
                       time = t_horizon) %>%
            unnest(.pred)
 tmp <-  tmp_tbl %>% select(.pred_survival) %>% pull()
+
 
 gbsg5$pred <- 1 -tmp                                         
 range(gbsg5$pred) 
@@ -246,10 +274,12 @@ numsum_cph <- c(
 )
 numsum_cph
 
+#' ## Calibration (ICI, E50, E90, Emax, calibration slope)
 # calibration slope (fixed time point)-------------------------------------
-
-gval <- coxph(Surv(ryear, rfs) ~ lp , data = gbsg5)
-gbsg5$lp[1:8]
+# Note: `gbsg5$lp_td` different from `gbsg5$lp` by a constant (see above)
+#'
+gval <- coxph(Surv(ryear, rfs) ~ lp_td , data = gbsg5)
+gbsg5$lp_td[1:8]
 
 calslope_summary <- c(
   "calibration slope" = gval$coef,
@@ -259,18 +289,18 @@ calslope_summary <- c(
 
 calslope_summary
 
-#+ chunk
-knitr::knit_exit()
 
 
 
 #' ## Overall performance
-# Cannot find function (S3-method) called predictRisk._coxph
-# Cannot find function (S3-method) called predictRisk.model_fit
+#'
+#'* `ph_efit1` does not work
+#'* Cannot find function (S3-method) called predictRisk._coxph
+#'* Cannot find function (S3-method) called predictRisk.model_fit
 
 
 score_gbsg5 <-
-  riskRegression::Score(list("cox" = ph_efit1),
+  riskRegression::Score(list("cox" = efit1),  # `ph_efit1` does not work
                         formula = Surv(ryear, rfs) ~ 1, 
                         data = gbsg5, 
                         conf.int = TRUE, 
@@ -297,6 +327,7 @@ survfit_all <- summary(
   times = horizon
 )
 f_all <- 1 - survfit_all$surv
+print(f_all)
 
 # 3. Calculate Net Benefit across all thresholds
 list_nb <- lapply(thresholds, function(ps) {
@@ -331,7 +362,9 @@ list_nb <- lapply(thresholds, function(ps) {
 
 # Combine into data frame
 df_nb <- do.call(rbind.data.frame, list_nb)
-
+str(df_nb)
+head(df_nb)
+tail(df_nb)
 # read off at 23% threshold
 df_nb[df_nb$threshold == 0.23,]
 
@@ -385,3 +418,6 @@ legend("topright",
        bty = "n"
 )
 title("Validation data")
+#
+#+ chunk-exit
+knitr::knit_exit()

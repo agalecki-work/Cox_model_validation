@@ -298,6 +298,9 @@ list_nb <- lapply(thresholds, function(ps) {
 
 # Combine into data frame
 df_nb <- do.call(rbind.data.frame, list_nb)
+str(df_nb)
+head(df_nb)
+tail(df_nb)
 
 # read off at 23% threshold
 df_nb[df_nb$threshold == 0.23,]
@@ -352,3 +355,4 @@ legend("topright",
        bty = "n"
 )
 title("Validation data")
+#--
