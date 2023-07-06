@@ -1,3 +1,4 @@
+#` 
 #' ---
 #' title: "25_main-tidy.R"
 #' output:
@@ -49,6 +50,7 @@ efit1 <- coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
                data = rott5, 
                x = T, 
                y = T)
+
 
 
 #' ## Tidy
@@ -294,13 +296,13 @@ calslope_summary
 
 #' ## Overall performance
 #'
-#'* `ph_efit1` does not work
+#'* `ph_efit1` does not work, `efit1x` is used
 #'* Cannot find function (S3-method) called predictRisk._coxph
 #'* Cannot find function (S3-method) called predictRisk.model_fit
 
-
+#' ### Brier score (`efit1`)
 score_gbsg5 <-
-  riskRegression::Score(list("cox" = efit1),  # `ph_efit1` does not work
+  riskRegression::Score(list("cox" = efit1),  # atg: `ph_efit1` does not work
                         formula = Surv(ryear, rfs) ~ 1, 
                         data = gbsg5, 
                         conf.int = TRUE, 
@@ -312,6 +314,31 @@ score_gbsg5 <-
 
 
 score_gbsg5$Brier$score 
+
+score_gbsg5x <- score_gbsg5 # atg: copy saved for inspection
+rm(score_gbsg5) 
+
+#' ### Brier score (`efit1_ph`)
+
+# 
+# colnames(lung_surv)
+# lung_surv %>% unnest(.pred) %>% colnames()
+
+surv_obj  <- with(gbsg5, Surv(ryear,rfs))
+pred_time <- predict(ph_efit1, gbsg5, type = "time")
+pred_surv <- predict(ph_efit1, gbsg5, type = "survival", eval_time = 4.99) 
+wght_cens <- tibble(.weight_censored = rep(1, nrow(gbsg5))) #Place holder
+
+
+surv_tbl  <- tibble (surv_obj = surv_obj)
+pred_res <- bind_cols(pred_surv, pred_time, surv_tbl)
+pred_res %>% unnest(.pred) %>% colnames()
+
+# pred_res %>% brier_survival(
+#    truth = surv_obj,
+#    .pred
+#   )
+         
 
 
 
