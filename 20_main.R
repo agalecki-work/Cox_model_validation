@@ -31,7 +31,8 @@ if (anl == "censored_survival") anl2 <- TRUE
 # Libraries and options ----------------------------------
 
 # General packages
-pkgs <- c("survival","rms", "timeROC","riskRegression","tidymodels","censored")
+pkgs <- c("survival","rms", "timeROC","riskRegression","tidymodels","censored", "survivalROC")
+
 
 vapply(pkgs, function(pkg) {
   if (!require(pkg, character.only = TRUE)) install.packages(pkg)
@@ -179,6 +180,61 @@ Uno_AUC_res <- c(
 )
 
 Uno_AUC_res
+
+
+#' ## Cumulative case/dynamic control ROC
+
+
+#' -- Define a helper function to evaluate AUC at various time points
+#' 
+#' Adopted from:
+#'   https://datascienceplus.com/time-dependent-roc-for-survival-prediction-models-in-r
+survivalROC_helper <- function(t) {
+    survivalROC(Stime        = gbsg5$ryear,
+                status       = gbsg5$rfs,
+                marker       = gbsg5$lp,
+                predict.time = t,
+                method       = "NNE",
+                span = 0.25 * nrow(gbsg5)^(-0.20))
+}
+
+#' -- Evaluate every year:  1 through 5
+
+survivalROC_data <- tibble(t = 1:5) %>%
+    mutate(survivalROC = map(t, survivalROC_helper),
+           ## Extract scalar AUC
+           auc = map_dbl(survivalROC, magrittr::extract2, "AUC"),
+           ## Put cut off dependent values in a data_frame
+           df_survivalROC = map(survivalROC, function(obj) {
+               as_tibble(obj[c("cut.values","TP","FP")])
+           })) %>%
+    dplyr::select(-survivalROC) %>%
+    unnest(df_survivalROC) %>%
+    arrange(t, FP, TP)
+
+#' * object  printed: `r anno`     
+#+ chunk-anno2a, eval=anno, echo=anno
+str(survivalROC_helper(5))
+survivalROC_data
+
+#' -- Plot Cumulative case/dynamic control ROC
+
+#+ chunk-plot-dynamicROC
+
+survivalROC_data %>%
+    ggplot(mapping = aes(x = FP, y = TP)) +
+    geom_point() +
+    geom_line() +
+    geom_label(data = survivalROC_data %>% dplyr::select(t,auc) %>% unique,
+               mapping = aes(label = sprintf("%.3f", auc)), x = 0.5, y = 0.5) +
+    facet_wrap( ~ t) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+          legend.key = element_blank(),
+          plot.title = element_text(hjust = 0.5),
+          strip.background = element_blank())
+
+
 
 /* -------------- CALIBRATION -------------- */
 
