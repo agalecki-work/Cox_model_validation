@@ -17,13 +17,15 @@ anl1 <- anl2 <- anl3 <- FALSE
 if (anl == "coxph")  anl1 <- TRUE
 if (anl == "censored_survival") anl2 <- TRUE
 
-
+/* -----------  INTRO -----------*/
 #' # Intro (`r anl`)
 #'
 #' Based on code developed by Daniele Giardiello's work posted at:
 #'
-#' https://github.com/danielegiardiello/Prediction_performance_survival 
+#' https://github.com/danielegiardiello/Prediction_performance_survival
+#'
 #' * Analysis selected: `r anl`
+#'
 #' More detailed output: `r anno`
 
 # Libraries and options ----------------------------------
@@ -40,6 +42,7 @@ options(show.signif.stars = FALSE)  # display statistical intelligence
 palette("Okabe-Ito")  # color-blind friendly  (needs R 4.0)
 tidymodels_prefer()
 
+/* ----------- LOAD DATA -----------------*/
 
 #' # Load Data
 
@@ -60,7 +63,8 @@ rm(gbsg_, rotterdam_) # not needed
  class(gbsg5)
  dim(gbsg5)
 #'
-  
+ 
+/* ------- MODEL DEVELOPMENT -------------*/ 
 #' # Model development
 
 #' * Model fitted using `r anl`
@@ -82,7 +86,7 @@ gbsg5$lp  <- NULL
     set_mode("censored regression")
     
  efit1    <- ph_spec %>% fit(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
- tmp  <- predict(ph_efit1, new_data = gbsg5,
+ tmp  <- predict(efit1, new_data = gbsg5,
                     type = "linear_pred")  %>% pull()
  gbsg5$lp <- - tmp
 
@@ -90,12 +94,14 @@ gbsg5$lp  <- NULL
 
 #+ chunk-class-efit1, eval =anno, echo=anno
  class(efit1)
-#'              
+ range(gbsg5$lp)
+ gbsg5$lp[1:8]
+#'                
 
 # The model with additional PGR marker (skipped)
 #--> efit1_pgr  <- update(efit1, . ~ . + pgr2 + pgr3)
 
-
+/* ------------  DISCRIMINATION  ------------*/
 #' # Discrimination
 
 #' ## Harrell's and Uno's C 
@@ -174,6 +180,7 @@ Uno_AUC_res <- c(
 
 Uno_AUC_res
 
+/* -------------- CALIBRATION -------------- */
 
 #' # Calibration
 
@@ -192,18 +199,17 @@ obs_t <- 1 - obj$surv
 #+ chunk-anno3, eval=anno, echo=anno
 str(obj)
 obs_t
-#' /* Chunk ends */ 
+
 
 #' * Predicted risk 
 
 gbsg5$pred <- NULL
 
-#+ chunk-coxph, eval=anl1, echo=anl1
+#+ chunk-coxph-risk, eval=anl1, echo=anl1
  gbsg5$pred <- riskRegression::predictRisk(efit1, 
                       newdata = gbsg5,
                       times = t_horizon)
-#' * gbsg5$pred created using riskRegression::predictRisk() fuction
- 
+
 
 #+ chunk-censored, eval=anl2, echo=anl2
  tmp_tbl  <- predict(efit1, 
@@ -213,7 +219,9 @@ gbsg5$pred <- NULL
             unnest(.pred)
  tmp <-  tmp_tbl %>% select(.pred_survival) %>% pull()
  gbsg5$pred <- 1 -tmp 
-#' * gbsg5$pred created using predict() method
+
+
+#' * gbsg5$pred created using `r anl`
 
 #' * Expected
 exp_t <- mean(gbsg5$pred)
@@ -344,10 +352,11 @@ calslope_summary <- c(
 
 calslope_summary
 
-
+/* ------------ OVERALL PERFORMANCE ------------*/
 
 #' # Overall performance
 
+#+ chunk-coxph-Score, eval=anl1, echo=anl1
 score_gbsg5 <-
   riskRegression::Score(list("cox" = efit1),
                         formula = Surv(ryear, rfs) ~ 1, 
@@ -360,6 +369,14 @@ score_gbsg5 <-
 )
 
 score_gbsg5$Brier$score 
+
+#+ chunk-censored-Score, eval=anl2, echo=anl2
+score_gbsg5 <- NA
+message("score_gbsg5 not calculated")
+
+
+#+ chunk-anno71, eval=anno, echo=anno
+str(score_gbsg5)
 
 #' # Clinical utility
 
@@ -407,9 +424,12 @@ list_nb <- lapply(thresholds, function(ps) {
 
 # Combine into data frame
 df_nb <- do.call(rbind.data.frame, list_nb)
+
+#+ chunk-anno7, eval=anno, echo=anno
 str(df_nb)
 head(df_nb)
 tail(df_nb)
+#' Info on df_nb printed: `r anno` 
 
 # read off at 23% threshold
 df_nb[df_nb$threshold == 0.23,]
