@@ -1,5 +1,5 @@
 #' ---
-#' title: "25_main-tidy.R"
+#' title: "50_coxnet-tidy.R"
 #' output:
 #'   rmdformats::readthedown:
 #'     lightbox: true
@@ -7,7 +7,7 @@
 #' ---
 #+ chunk-not-executed, include = FALSE
 # To generate Rmd and html files  execute the line below:
-# s = "25_main-tidy.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
+# s = "50_coxnet-tidy.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
 #'
 #' # Intro
 #'
@@ -18,7 +18,7 @@
 # Libraries and options ----------------------------------
 rm(list=ls())
 # General packages
-pkgs <- c("survival", "rms", "timeROC", "riskRegression")
+pkgs <- c("survival", "rms", "timeROC", "riskRegression", "glmnet")
 vapply(pkgs, function(pkg) {
   if (!require(pkg, character.only = TRUE)) install.packages(pkg)
   require(pkg, character.only = TRUE, quietly = TRUE)
@@ -42,25 +42,18 @@ rm(gbsg_, rotterdam_) # not needed
 
 #' # Model development
 
-#' ## Survival
-
-library(survival)
-efit1 <- coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
-               data = rott5, 
-               x = T, 
-               y = T)
 
 
 
-#' ## Tidy
+#' ## Glmnet
 
 library(tidymodels)
 library(censored)
 tidymodels_prefer()
   
 ph_spec  <- 
-    proportional_hazards() %>%
-    set_engine("survival") %>% 
+    proportional_hazards(penalty = 0.1) %>%
+    set_engine("glmnet") %>% 
     set_mode("censored regression")
     
 ph_efit1 <- ph_spec %>% fit(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
@@ -73,13 +66,6 @@ ph_efit1
 
 #'* Add linear predictor in the validation set
 #'* See https://www.tidyverse.org/blog/2021/11/survival-analysis-parsnip-adjacent/
-#'* Note: `gbsg5$td_lp` obtained below is different from `gbsg5$lp` obtained using survival package
-#'* Difference is 0.4176962 (tidy minus survival) Ex. 0.5390812-0.1213850
-#'
-#' lp using survival
-gbsg5$lp <-   predict(efit1, newdata = gbsg5)
-range(gbsg5$lp)
-gbsg5$lp[1:8]
 
 #' lp using tidy
 gbsg5$td_lp <- - predict(ph_efit1, new_data = gbsg5,
@@ -87,11 +73,6 @@ gbsg5$td_lp <- - predict(ph_efit1, new_data = gbsg5,
 
 range(gbsg5$td_lp)
 gbsg5$td_lp[1:8]
-
-#' Cross-check
-diffx <- gbsg5$td_lp - gbsg5$lp
-range(diffx)
-gbsg5$lp <- NULL  # not needed
 
 
 
@@ -142,7 +123,6 @@ Uno_gbsg5 <-
     iid = TRUE
   )
 
-
 Uno_AUC_res <- c(
   "Uno AUC" = unname(Uno_gbsg5$AUC[2]),
   "2.5 %" = unname(Uno_gbsg5$AUC["t=4.99"] -
@@ -167,7 +147,7 @@ obj <- summary(survfit(
 obs_t <- 1 - obj$surv
 range(obs_t)
 
-# Predicted risk (tidy)
+# Predicted risk 
 
 tmp_tbl  <- predict(ph_efit1, 
                       type ="survival",
@@ -213,7 +193,6 @@ vcal <- rms::cph(Surv(ryear, rfs) ~ rcs(pred.cll, 3),
                  surv = T,
                  data = gbsg5
 ) 
-names(vcal)
 
 dat_cal <- cbind.data.frame(
   "obs" = 1 - rms::survest(vcal, 
@@ -229,13 +208,8 @@ dat_cal <- cbind.data.frame(
                              newdata = gbsg5)$lower,
   "pred" = gbsg5$pred
 )
-dim(gbsg5)
-dim(dat_cal)
-colnames(dat_cal)
 
 dat_cal <- dat_cal[order(dat_cal$pred), ]
-head(dat_cal)
-tail(dat_cal)
 
 #+ chunk-calibration-plot
 # dev.new()
@@ -307,22 +281,16 @@ calslope_summary
 #'* Cannot find function (S3-method) called predictRisk.model_fit
 
 #' ### Brier score (`efit1`)
-score_gbsg5 <-
-  riskRegression::Score(list("cox" = efit1),  # atg: `ph_efit1` does not work
-                        formula = Surv(ryear, rfs) ~ 1, 
-                        data = gbsg5, 
-                        conf.int = TRUE, 
-                        times = 4.99,
-                        cens.model = "km", 
-                        metrics = "brier",
-                        summary = "ipa"
-)
+
+# score_gbsg5 <-
+#   riskRegression::Score(list("cox" = efit1),  # atg: `ph_efit1` does not work
+                       
 
 
-score_gbsg5$Brier$score 
+# score_gbsg5$Brier$score 
 
-score_gbsg5x <- score_gbsg5 # atg: copy saved for inspection
-rm(score_gbsg5) 
+#score_gbsg5x <- score_gbsg5 # atg: copy saved for inspection
+# rm(score_gbsg5) 
 
 #' ### Brier score (`efit1_ph`)
 
@@ -340,7 +308,7 @@ surv_tbl  <- tibble (surv_obj = surv_obj)
 pred_res <- bind_cols(pred_surv, pred_time, surv_tbl)
 pred_res %>% unnest(.pred) %>% colnames()
 
-# pred_res %>% brier_survival(
+# pred_res %>% brier_survival(   # DOES not work
 #    truth = surv_obj,
 #    .pred
 #   )

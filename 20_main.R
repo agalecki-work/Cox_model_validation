@@ -9,16 +9,28 @@
 # To generate Rmd and html files  execute the line below:
 # s = "20_main.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
 #'
-#' # Intro
+#+ chunk-init, echo=FALSE
+rm(list = ls())
+anno <- TRUE   # More detailed output
+anl  <- "coxph"  # "coxph" "censored_survival"
+anl1 <- anl2 <- anl3 <- FALSE
+if (anl == "coxph")  anl1 <- TRUE
+if (anl == "censored_survival") anl2 <- TRUE
+
+
+#' # Intro (`r anl`)
 #'
-#' Code developed by Daniele Giardiello's work posted at:
+#' Based on code developed by Daniele Giardiello's work posted at:
 #'
-#' https://github.com/danielegiardiello/Prediction_performance_survival
+#' https://github.com/danielegiardiello/Prediction_performance_survival 
+#' * Analysis selected: `r anl`
+#' More detailed output: `r anno`
 
 # Libraries and options ----------------------------------
 
 # General packages
-pkgs <- c("survival", "rms", "timeROC", "riskRegression")
+pkgs <- c("survival","rms", "timeROC","riskRegression","tidymodels","censored")
+
 vapply(pkgs, function(pkg) {
   if (!require(pkg, character.only = TRUE)) install.packages(pkg)
   require(pkg, character.only = TRUE, quietly = TRUE)
@@ -26,49 +38,85 @@ vapply(pkgs, function(pkg) {
 
 options(show.signif.stars = FALSE)  # display statistical intelligence
 palette("Okabe-Ito")  # color-blind friendly  (needs R 4.0)
+tidymodels_prefer()
 
 
 #' # Load Data
 
+#'  * Load preprocessed `rott5` and `gbsb5` data from an external `Rdata` file 
+
 # Load data
 
-#'  --- Load preprocessed `rott5` and `gbsb5` data from an external `Rdata` file 
-rm(list = ls())
 fpathin <-"./Rdata/rotterdam_gbsg.Rdata"
 load(file = fpathin, verbose = TRUE)
 rm(gbsg_, rotterdam_) # not needed
 
+#' * Data info printed: `r anno`
 
-
+#+ chunk-anno1, eval=anno, echo=anno
+# Data info
+ class(rott5)
+ dim(rott5)
+ class(gbsg5)
+ dim(gbsg5)
+#'
+  
 #' # Model development
 
-efit1 <- coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
-               data = rott5, 
-               x = T, 
-               y = T)
+#' * Model fitted using `r anl`
+gbsg5$lp  <- NULL
+
+#+ analysis-coxph, eval = anl1, echo = anl1
+  efit1 <- coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3,
+      data = rott5, 
+      x = T, 
+      y = T)
+  # Add linear predictor in the validation set
+  gbsg5$lp <- predict(efit1, newdata = gbsg5)
+ 
+
+#+ analysis-cox-censored, eval = anl2, echo = anl2
+ ph_spec  <- 
+    proportional_hazards() %>%
+    set_engine("survival") %>% 
+    set_mode("censored regression")
+    
+ efit1    <- ph_spec %>% fit(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
+ tmp  <- predict(ph_efit1, new_data = gbsg5,
+                    type = "linear_pred")  %>% pull()
+ gbsg5$lp <- - tmp
+
+#' --- Model fit info printed: `r anno`
+
+#+ chunk-class-efit1, eval =anno, echo=anno
+ class(efit1)
+#'              
 
 # The model with additional PGR marker (skipped)
 #--> efit1_pgr  <- update(efit1, . ~ . + pgr2 + pgr3)
 
 
-#' # Validation of the original model
-#'
-#' ## Discrimination
+#' # Discrimination
 
-# Add linear predictor in the validation set
-gbsg5$lp <- predict(efit1, newdata = gbsg5)
+#' ## Harrell's and Uno's C 
 
-
-### Validation data
-# Harrell's C
+#' * Harrell's C
 harrell_C_gbsg5 <- concordance(Surv(ryear, rfs) ~ lp, 
                                gbsg5, 
                                reverse = TRUE)
-# Uno's C
+#' * Concordance object (harrel)  info printed: `r anno`
+if (anno) str(harrell_C_gbsg5)
+
+#' * Uno's C
 Uno_C_gbsg5 <- concordance(Surv(ryear, rfs) ~ lp, 
                            gbsg5, 
                            reverse = TRUE,
                            timewt = "n/G2")
+#' * Concordance object (Uno) info printed: `r anno`                         
+if (anno) str(Uno_C_gbsg5) 
+                           
+#' * Store Harrell's and Uno's concordance results in a matrix.
+
 alpha <- .05
 res_C <- matrix(
   c(
@@ -90,10 +138,13 @@ res_C <- matrix(
   dimnames = list(c("Harrell C", "Uno C"),
                   c("Estimate", "2.5 %", "97.5 %"))
 )
-
+#+ chunk-resC-output
 res_C
+#'
 
-# Uno's time dependent AUC
+#' ## Uno's time dependent AUC
+
+#' * Uno's time dependent AUC
 
 Uno_gbsg5 <-
   timeROC::timeROC(
@@ -106,6 +157,13 @@ Uno_gbsg5 <-
     iid = TRUE
   )
 
+#' * Uno_gbsg5 object info printed: `r anno`     
+#+ chunk-anno2, eval=anno, echo=anno
+  names(Uno_gbsg5)
+  str(Uno_gbsg5)
+#'
+
+#' --- Uno_AUC_res
 Uno_AUC_res <- c(
   "Uno AUC" = unname(Uno_gbsg5$AUC[2]),
   "2.5 %" = unname(Uno_gbsg5$AUC["t=4.99"] -
@@ -117,27 +175,57 @@ Uno_AUC_res <- c(
 Uno_AUC_res
 
 
+#' # Calibration
 
-#' ## Calibration
+#' ## Observed / Expected ratio
 
-# Observed / Expected ratio
 t_horizon <- 5
 
-# Observed
+#` * Observed
 obj <- summary(survfit(
   Surv(ryear, rfs) ~ 1, 
   data = gbsg5),
   times = t_horizon)
-
 obs_t <- 1 - obj$surv
 
-# Predicted risk 
-gbsg5$pred <- riskRegression::predictRisk(efit1, 
-                                          newdata = gbsg5,
-                                          times = t_horizon)
-# Expected
+#' * object  printed: `r anno`     
+#+ chunk-anno3, eval=anno, echo=anno
+str(obj)
+obs_t
+#' /* Chunk ends */ 
+
+#' * Predicted risk 
+
+gbsg5$pred <- NULL
+
+#+ chunk-coxph, eval=anl1, echo=anl1
+ gbsg5$pred <- riskRegression::predictRisk(efit1, 
+                      newdata = gbsg5,
+                      times = t_horizon)
+#' * gbsg5$pred created using riskRegression::predictRisk() fuction
+ 
+
+#+ chunk-censored, eval=anl2, echo=anl2
+ tmp_tbl  <- predict(efit1, 
+                       type ="survival",
+                       new_data = gbsg5,
+                       time = t_horizon) %>%
+            unnest(.pred)
+ tmp <-  tmp_tbl %>% select(.pred_survival) %>% pull()
+ gbsg5$pred <- 1 -tmp 
+#' * gbsg5$pred created using predict() method
+
+#' * Expected
 exp_t <- mean(gbsg5$pred)
 
+#+ chunk-anno4, eval=anno, echo=anno
+   length(gbsg5$pred)
+   range(gbsg5$pred)
+   mean(gbsg5$pred)
+   gbsg5$pred[1:8]
+#' 
+
+#' * Observed/Expected
 OE_t <- obs_t / exp_t
 
 alpha <- .05
@@ -154,6 +242,11 @@ OE_summary
 #' ## Calibration plot
 gbsg5$pred.cll <- log(-log(1 - gbsg5$pred))
 
+#+ chunk-bindx, eval =anno, echo=anno
+ bindx <- with(gbsg5, cbind(lp,pred, pred.cll))
+ colnames(bindx) <- c("lp", "pred", "pred.cll")
+ head(bindx)
+#'  --- bindx printed `r anno`
 
 # Estimate actual risk
 vcal <- rms::cph(Surv(ryear, rfs) ~ rcs(pred.cll, 3),
@@ -163,6 +256,10 @@ vcal <- rms::cph(Surv(ryear, rfs) ~ rcs(pred.cll, 3),
                  data = gbsg5
 ) 
 
+#+ chunk-anno5, eval=anno, echo=anno
+str(vcal)
+#' 
+ 
 dat_cal <- cbind.data.frame(
   "obs" = 1 - rms::survest(vcal, 
                            times = 5, 
@@ -179,6 +276,7 @@ dat_cal <- cbind.data.frame(
 )
 
 dat_cal <- dat_cal[order(dat_cal$pred), ]
+
 
 #+ chunk-calibration-plot
 # dev.new()
@@ -214,9 +312,19 @@ legend("bottomright",
        lwd = c(2, 2, 2),
        bty = "n",
        cex = 0.85)
+#' 
 
 # Numerical measures
 absdiff_cph <- abs(dat_cal$pred - dat_cal$obs)
+
+#+ chunk-anno6, eval=anno, echo=anno
+dim(dat_cal)
+dat_cal2 <- cbind(dat_cal, absdiff_cph)
+head(dat_cal2)
+tail(dat_cal2)
+#'  head(dat_cal2) printed: anno
+
+
 
 numsum_cph <- c(
   "ICI" = mean(absdiff_cph),
@@ -238,7 +346,8 @@ calslope_summary
 
 
 
-#' ## Overall performance
+#' # Overall performance
+
 score_gbsg5 <-
   riskRegression::Score(list("cox" = efit1),
                         formula = Surv(ryear, rfs) ~ 1, 
@@ -252,7 +361,7 @@ score_gbsg5 <-
 
 score_gbsg5$Brier$score 
 
-#' ## Clinical utility
+#' # Clinical utility
 
 # 1. Set grid of thresholds
 thresholds <- seq(0, 1.0, by = 0.01)
