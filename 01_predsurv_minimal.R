@@ -379,6 +379,7 @@ list_nb <- lapply(thresholds, function(ps) {
   }
   
   # Return together
+  if (length(NB) == 0) NB <- 0  # <--- 
   df_res <- data.frame("threshold" = ps, "NB" = NB, "treat_all" = NB_all)
   return(df_res)
 })
@@ -683,6 +684,7 @@ list_nb <- lapply(thresholds, function(ps) {
   }
   
   # Return together
+  if (length(NB) == 0) NB <- 0  # <--- 
   df_res <- data.frame("threshold" = ps, "NB" = NB, "treat_all" = NB_all)
   return(df_res)
 })
