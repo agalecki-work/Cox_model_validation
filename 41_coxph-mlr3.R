@@ -1,5 +1,5 @@
 #' ---
-#' title: "40_coxph-mlr3.R"
+#' title: "41_coxph-mlr3.R External vlidation"
 #' output:
 #'   rmdformats::readthedown:
 #'     lightbox: true
@@ -7,20 +7,25 @@
 #' ---
 #+ chunk-not-executed, include = FALSE
 # To generate Rmd and html files  execute the line below:
-# s = "50_coxnet-tidy.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
+# s = "41_coxph-mlr3.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
 #'
 #' # Intro
 #'
-#' Code developed by Daniele Giardiello's work posted at:
+#' Based on Code developed by Daniele Giardiello's work posted at:
 #'
 #' https://github.com/danielegiardiello/Prediction_performance_survival
+
+# ============ SETUP
+
+#' # Setup
+#'
+#' Libraries/options/functions
 
 # Libraries and options ----------------------------------
 rm(list=ls())
 # General packages
-pkgs <- c("survival", "rms", "timeROC", "riskRegression", "glmnet", "dplyr", 
-          "mlr3", "mlr3proba", "mlr3learners", "mlr3extralearners", "mlr3pipelines",
-          "iml")
+pkgs <- c("survival", "rms", "timeROC", "riskRegression", "glmnet", "dplyr", "purrr",
+          "mlr3", "mlr3proba", "mlr3learners", "mlr3extralearners", "mlr3pipelines","survivalROC" )
 vapply(pkgs, function(pkg) {
   if (!require(pkg, character.only = TRUE)) install.packages(pkg)
   require(pkg, character.only = TRUE, quietly = TRUE)
@@ -30,201 +35,235 @@ options(show.signif.stars = FALSE)  # display statistical intelligence
 palette("Okabe-Ito")  # color-blind friendly  (needs R 4.0)
 
 
+#  ================== Load data
 #' # Load Data
+#'
+#'  Load preprocessed `rott5` and `gbsg5` data from an external `Rdata` file 
 
 # Load data
-
-#'  --- Load preprocessed `rott5` and `gbsb5` data from an external `Rdata` file 
-rm(list = ls())
 fpathin <-"./Rdata/rotterdam_gbsg.Rdata"
 oloaded = load(file = fpathin)
 print(oloaded)
 rm(gbsg_, rotterdam_) # not needed
 
 
-efit1 = coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
-efit1
-rm(efit1)
+# Combine train and test data
 
+select_vars = c("pid","ryear","rfs", "csize", "nodes2", "nodes3", "grade3", "pgr3")
+rott5b = rott5 %>% select(all_of(select_vars)) %>% mutate(trainx=1)
+gbsg5b = gbsg5 %>% select(all_of(select_vars)) %>% mutate(trainx=0)
+combined_dt = as.data.table(bind_rows(rott5b, gbsg5b))
+print(combined_dt)
 
-umodify_task = function(task)
-{
- selected_features = c("csize", "nodes2", "nodes3", "grade3")
+#  ==================  Create (combined) task
+#' #  Create task
+#'
+#' * Create survival task for `combined_dt` data table
 
- # Filter the task to use only the selected features
- task$select(selected_features)
- task$col_roles$group = "pid"
- task$col_roles$weight = "weights"
- 
- # task$col_roles$stratum = "grade3" # Defines stratification variables for resampling strategies.
- # task$col_roles$order = "time_order"
- return(task)
-}
+task = TaskSurv$new(id = "surv_task", backend = combined_dt, time = "ryear", event = "rfs", type="right", 
+           label = "task for Surv(ryear, rfs)")
+  selected_features = c("csize", "nodes2", "nodes3", "grade3")
 
-
-#' # Model development
-
-set.seed(123)
-rott5$weights <- runif(nrow(rott5), min = 1, max = 2)
-gbsg5$weights <- runif(nrow(gbsg5), min = 1, max = 2)
-
-task = TaskSurv$new(id = "task used for training", backend = rott5, time = "ryear", event = "rfs", type="right")
-task = umodify_task(task)
+  # Filter the task to use only the selected features
+  task$select(selected_features)
 print(task)
 
-task$feature_names
-task$kaplan()
+# Partition task
+#' * Partition task
 
-# Create survival task for external validation data
-task_e = TaskSurv$new(id = "task_external", backend =gbsg5 , time = "ryear", event = "rfs", type = "right")
-task_e = umodify_task(task_e)
+train_indexes = which(combined_dt$trainx ==1)
+val_indexes  = which(combined_dt$trainx ==0)
+part = list(train = train_indexes, val = val_indexes, test= numeric(0))
 
+# Create task_train
+task_train = task$clone()
+task_train$filter(part$train)
+plot(task_train$kaplan())
+
+task_val   = task$clone()
+task_val$filter(part$val)
+rm(task)
+
+#  ======================== Model training
+#' # Model training
+#'
+# Fit model
+
+#' Fit model using `"coxph()" (optional) 
+efit1 = coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
+efit1
+# rm(efit1)
+
+
+
+# --- Train learner on task `task`
  
+#' ## Train learner
+#' 
+#' Train learner on training data
+
 learner = lrn("surv.coxph")
-learner$train(task)
+learner$train(task_train, row_ids = part$train)
+
+learner$id     # Extract learner id. Ex. "surv.coxph"
 summary(learner$model)
 
-p = learner$predict(task_e)  # prediction on external data
+# Predict using the trained learner on the training task
+prediction_train = learner$predict(task_train)
 
 
-# Define a custom measure for C-index with SE in R6 class
-MeasureSurvConcordance = R6::R6Class(
-  "MeasureSurvConcordance",
-  inherit = MeasureSurv,
-  public = list(
-    initialize = function() {
-      super$initialize(
-        id = "surv.concordance",
-        range = c(0, 1),  # Concordance ranges from 0 to 1
-        minimize = FALSE,
-        predict_type = "crank"
-      )
-    },
-    
-    # Override the score method to calculate concordance
-    score = function(prediction, task= NULL) {
- 
-      Survx <- prediction$truth # default
-      predx <- prediction$lp
-      weights <- unlist(task$weights[, "weight"])
-      pred <- -predx
-            
-      # Calculate concordance  using `concordance` function from survival package
-      concordance_result <- if (is.null(weights)) survival::concordance(Survx ~ pred ) else 
-        {
-        survival::concordance(Survx ~ pred, weights= weights)
-        }
-    concordance_result
-  }  
-  )
-)
+#========== Prediction: Use trained learner to create predictions using external task `task_e` 
+
+#' # Prediction external 
+#'
+#' Use trained learner on external task to create predictions in external task `task_e` 
+
+#' * Task for validation
+#' 
+#' Create survival task for (external) testing/validation
+
+
+# Create survival task for external validation data
+# plot(task_val$kaplan())
 
 
 
-# Initialize the custom measure
-# measure_concordance <- MeasureSurvConcordance$new()
-msrx <- MeasureSurvCindexWeighted$new()
-# Harrell's C
+#' * Prediction
 
-# Calculate the C-index and SE
-harrell_C_gbsg5 <- msrx$score(p, task = task_e)
-print(harrell_C_gbsg5)
+prediction_val = learner$predict(task_val)  # prediction on validation task
 
-p$score(msrx)
+# ==================== Validation
 
+#' # Validation 
+#'
+#' Validation of the trained learner
 
-
-# Uno's C
-Uno_C_gbsg5 <- m$score(prediction,  weight_meth = "G2") 
-print(Uno_C_gbsg5)
+#  ------------
+#'
+#' ## Surv measures
+#'
 
 
-
-measures = msrs(c("surv.graf", "surv.rcll", "surv.cindex", "surv.dcalib"))
-
-#--- predict_type = "distr"
-
-prediction$distr[1:3]$survival(c(1, 3, 5, 7)) # prob surviving 5 years for the first 3 subjects in test data
-# cat("--- prediction survival \n")
-
-#---- predict_type = "crank" stands for continuous ranking. 
-#-  In mlr3proba there is one consistent interpretation of crank: 
-# lower values represent a lower risk of the event taking place and higher values represent higher risk.
-prediction$crank[1:3]
-# cat("--- prediction crank \n")
-
-## ==== MeasureSurv
-
-as.data.table(mlr_measures)[
-  task_type == "surv", c("key", "predict_type")]  # [1:5]
-  
-# surv.rcll  RCLL (right-censored logloss) to evaluate the quality of distr predictions
-# concordance index to evaluate a model’s discrimination,
-# D-Calibration to evaluate a model’s calibration 
-
-   performance_score = prediction$score(measures)
-
-# Filtering rows based on a logical condition (e.g., year greater than 1988)
-condition = dfx5$year > 1988
-
-# Creating a new task with rows meeting the condition
-task_filtered = task$clone(deep = TRUE)$filter(which(condition))
-
-#' ## Glmnet
-
-library(tidymodels)
-library(censored)
-tidymodels_prefer()
-  
-ph_spec  <- 
-    proportional_hazards(penalty = 0.1) %>%
-    set_engine("glmnet") %>% 
-    set_mode("censored regression")
-    
-ph_efit1 <- ph_spec %>% fit(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
-ph_efit1
-
-rm(ph_efit1) # Not needed
-
-
-
-
-#' # Validation of the original model
+# ---- Discrimination
 #'
 #' ## Discrimination
+
+
+#' * Recommended Concordance measures
+ 
+
+prediction_val$score(msrs(c("surv.rcll", "surv.cindex", "surv.dcalib")))
+
+#' * Time-independent concordance statistics (C-indexes)
+
+# mlr_measures$get("surv.cindex")$help()
+
+#' For the Kaplan-Meier estimate of the *training survival* distribution (S), and the Kaplan-Meier estimate
+#' of the *training censoring* distribution (G), we have the following options for time-independent concordance 
+#' statistics (C-indexes) given the weighted method (weight_meth):
+
+# (I) No weighting (Harrell) Concordance Index (same as "surv.cindex" measure). See above
+I_cindex_measure = msr("surv.cindex", weight_meth = "I")
+prediction_val$score(I_cindex_measure)
+
+# (GH) Gonen and Heller's Concordance Index (only applicable to "surv.coxph" learner")
+GH_cindex_measure = msr("surv.cindex", weight_meth = "GH")
+prediction_val$score(GH_cindex_measure)
+
+# (G) Weights concordance by 1/G.
+G_cindex_measure = msr("surv.cindex", weight_meth = "G")
+prediction_val$score(G_cindex_measure, task = task_val, train_set = part$train)
+
+# (G2) Define Uno's C-index measure
+G2_cindex_measure = msr("surv.cindex", weight_meth = "G2")
+prediction_val$score(G2_cindex_measure, task = task_val, train_set = part$train)
+
+# (SG) Shemper et al C-index measure
+SG_cindex_measure = msr("surv.cindex", weight_meth = "SG")
+prediction_val$score(SG_cindex_measure, task = task_val, train_set = part$train)
+
+# (S) Weights concordance by S (Peto and Peto)
+S_cindex_measure = msr("surv.cindex", weight_meth = "S")
+prediction_val$score(S_cindex_measure, task = task_val, train_set = part$train)
+
+
 
 
 ### Validation data
 
 
-
-
 # Uno's time dependent AUC
 
 
-
-time_values = 4.99
+time_values = 4.99  #Slightly smaller than time_horizon
 roc_result <-   timeROC::timeROC(
-    T = prediction$truth[, "time"], 
-    delta = prediction$truth[, "status"],
-    marker = prediction$lp,
+    T = prediction_val$truth[, "time"], 
+    delta = prediction_val$truth[, "status"],
+    marker = prediction_val$lp,
     cause = 1, 
     weighting = "marginal", 
     times = time_values,
     iid = TRUE
   )
-plot(roc_result,time_values)
+plot(roc_result, time_values)
+
+#' Confidence intervals for areas under time-dependent ROC curves
+
+set.seed(2341)
+# ?confint.ipcwsurvivalROC
+roc_result$AUC  # roc_result = Uno_AUC_res
+confint(roc_result)
 
 
-Uno_AUC_res <- c(
-  "Uno AUC" = unname(Uno_gbsg5$AUC[2]),
-  "2.5 %" = unname(Uno_gbsg5$AUC["t=4.99"] -
-    qnorm(1 - alpha / 2) * Uno_gbsg5$inference$vect_sd_1["t=4.99"]),
-  "97. 5 %" = unname(Uno_gbsg5$AUC["t=4.99"] +
-    qnorm(1 - alpha / 2) * Uno_gbsg5$inference$vect_sd_1["t=4.99"])
-)
 
-Uno_AUC_res
+#' -- Define a helper function to evaluate AUC at various time points
+#' 
+#' Adopted from:
+#'   https://datascienceplus.com/time-dependent-roc-for-survival-prediction-models-in-r
+survivalROC_helper <- function(t) {
+    survivalROC(Stime        = prediction_val$truth[, "time"],    # gbsg5$ryear
+                status       = prediction_val$truth[, "status"],  # gbsg5$rfs,
+                marker       = prediction_val$crank,              # gbsg5$lp,
+                predict.time = t,
+                method       = "NNE",
+                span = 0.25 * task_val$nrow^(-0.20))            #nrow(gbsg5)
+}
+
+#' -- Evaluate every year:  1 through 5
+
+survivalROC_data <- tibble(t = 1:5) %>%
+    mutate(survivalROC = map(t, survivalROC_helper),
+           ## Extract scalar AUC
+           auc = map_dbl(survivalROC, magrittr::extract2, "AUC"),
+           ## Put cut off dependent values in a data_frame
+           df_survivalROC = map(survivalROC, function(obj) {
+               as_tibble(obj[c("cut.values","TP","FP")])
+           })) %>%
+    dplyr::select(-survivalROC) %>%
+    tidyr::unnest(cols=df_survivalROC) %>%
+    arrange(t, FP, TP)
+
+#' * object  printed: `r anno`     
+#+ chunk-anno2a, eval=anno, echo=anno
+str(survivalROC_helper(5))
+survivalROC_data
+
+#' -- Plot Cumulative case/dynamic control ROC
+
+#+ chunk-plot-dynamicROC
+
+survivalROC_data %>%
+    ggplot(mapping = aes(x = FP, y = TP)) +
+    geom_point() +
+    geom_line() +
+    geom_label(data = survivalROC_data %>% dplyr::select(t,auc) %>% unique,
+               mapping = aes(label = sprintf("%.3f", auc)), x = 0.5, y = 0.5) +
+    facet_wrap( ~ t) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+          legend.key = element_blank(),
+          plot.title = element_text(hjust = 0.5),
+          strip.background = element_blank())
 
 #' ## Calibration (Observed / Expected ratio)
 
@@ -232,34 +271,21 @@ Uno_AUC_res
 t_horizon <- 5
 
 # Observed
-obj <- summary(survfit(
-  Surv(ryear, rfs) ~ 1, 
-  data = gbsg5),
-  times = t_horizon)
+surv_object = prediction_val$truth
+obj = summary(survfit(surv_object ~1),  times = t_horizon)
 
 obs_t <- 1 - obj$surv
 range(obs_t)
 
 # Predicted risk 
 
-tmp_tbl  <- predict(ph_efit1, 
-                      type ="survival",
-                      new_data = gbsg5,
-                      time = t_horizon) %>%
-           unnest(.pred)
-tmp <-  tmp_tbl %>% select(.pred_survival) %>% pull()
-
-
-gbsg5$pred <- 1 -tmp                                         
-range(gbsg5$pred) 
-gbsg5$pred[1:8]
-
 # Expected
-exp_t <- mean(gbsg5$pred)
+surv_mtx = prediction_val$distr$survival(t_horizon)
+survx    = surv_mtx[1,] # `1-pred`
+exp_t    = mean(1-survx)
+exp_t
 
 OE_t <- obs_t / exp_t
-
-
 
 alpha <- .05
 OE_summary <- c(
@@ -271,36 +297,40 @@ OE_summary <- c(
 OE_summary
 
 
-
-
 #' ## Calibration plot
-range(gbsg5$pred)
-gbsg5$pred.cll <- log(-log(1 - gbsg5$pred))
-range(gbsg5$pred.cll)
-gbsg5$pred.cll[1:8]
+## gbsg5$pred)  same as  1-survx
+#gbsg5$pred.cll <- log(-log(1 - gbsg5$pred))
+#range(gbsg5$pred.cll)
+#gbsg5$pred.cll[1:8]
+pred.cll = log(-log(survx))
 
 # Estimate actual risk
-vcal <- rms::cph(Surv(ryear, rfs) ~ rcs(pred.cll, 3),
+vcal <- rms::cph(surv_object ~ rcs(pred.cll, 3),
                  x = T,
                  y = T,
                  surv = T,
-                 data = gbsg5
+                 data = task_val$data()
 ) 
 
-dat_cal <- cbind.data.frame(
-  "obs" = 1 - rms::survest(vcal, 
-                           times = 5, 
-                           newdata = gbsg5)$surv,
-  
-  "lower" = 1 - rms::survest(vcal, 
-                             times = 5, 
-                             newdata = gbsg5)$upper,
-  
-  "upper" = 1 - rms::survest(vcal, 
-                             times = 5, 
-                             newdata = gbsg5)$lower,
-  "pred" = gbsg5$pred
+tt  =  rms::survest(vcal, 
+                 times = 5, 
+                 newdata = task_val$data())
+              
+# Create the DataFrame
+dat_cal <- data.frame(
+  time     = tt$time,
+  obs      =  1 - tt$surv,
+  std.err  = tt$std.err,
+  lower    = 1- tt$lower,
+  upper    = 1- tt$upper,
+  pred     = 1-survx
 )
+
+#>   time       obs    std.err     lower     upper      pred
+#> 1    5 0.3563124 0.05427376 0.4212684 0.2840659 0.3123175
+#> 2    5 0.7780406 0.14370876 0.8325256 0.7058298 0.7332724
+
+
 
 dat_cal <- dat_cal[order(dat_cal$pred), ]
 
@@ -353,11 +383,14 @@ numsum_cph
 # calibration slope (fixed time point)-------------------------------------
 # Note: `gbsg5$td_lp` different from `gbsg5$lp` by a constant (see above)
 #'
-gval <- coxph(Surv(ryear, rfs) ~ td_lp , data = gbsg5)
-gbsg5$td_lp[1:8]
+#- gval <- coxph(Surv(ryear, rfs) ~ td_lp , data = gbsg5)
+#- gbsg5$td_lp[1:8]
+
+
+gval <- coxph(surv_object ~ prediction_val$crank) # , data =task_val$data()) 
 
 calslope_summary <- c(
-  "calibration slope" = gval$coef,
+  "calibration slope" = unname(gval$coef),
   "2.5 %"  = gval$coef - qnorm(1 - alpha / 2) * sqrt(gval$var),
   "97.5 %" = gval$coef + qnorm(1 - alpha / 2) * sqrt(gval$var)
 )

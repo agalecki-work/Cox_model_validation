@@ -74,10 +74,14 @@ print(task1)
 task1$feature_names
 task1$kaplan()
 
-train_indices = which(dfx5$train_01 ==1)
-test_indices  = which(dfx5$train_01 ==0)
+# Partition task: Create split list
 
-split=list(train = train_indices, test= test_indices, validation= integer(0))
+train_indices = which(dfx5$train_01 ==1)
+val_indices   = which(dfx5$train_01 ==0)
+
+split=list(train = train_indices, test= integer(0), val = val_indices )
+
+# Train learner
  
 learner = lrn("surv.coxph")
 learner$train(task1, split$train)
