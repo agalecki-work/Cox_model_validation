@@ -1,5 +1,5 @@
 #' ---
-#' title: "41_coxph-mlr3.R External vlidation"
+#' title: "42_coxph-mlr3.R External vlidation"
 #' output:
 #'   rmdformats::readthedown:
 #'     lightbox: true
@@ -7,15 +7,18 @@
 #' ---
 #+ chunk-not-executed, include = FALSE
 # To generate Rmd and html files  execute the line below:
-# s = "41_coxph-mlr3.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
+# s = "42_coxph-mlr3.R"; o= knitr::spin(s, knit=FALSE); rmarkdown::render(o)
 #'
+
+##  /* -----------  INTRO -----------*/
+
 #' # Intro
 #'
 #' Based on Code developed by Daniele Giardiello's work posted at:
 #'
 #' https://github.com/danielegiardiello/Prediction_performance_survival
 
-# ============ SETUP
+##  /* ============ SETUP  ===================*/
 
 #' # Setup
 #'
@@ -23,10 +26,13 @@
 
 # Libraries and options ----------------------------------
 rm(list=ls())
+
+anno = TRUE
+
 # General packages
 pkgs <- c("survival", "rms", "timeROC", "riskRegression", "glmnet", "dplyr", "purrr",
-          "mlr3", "mlr3proba", "mlr3learners", "mlr3extralearners", "mlr3pipelines","survivalROC" )
-vapply(pkgs, function(pkg) {
+          "mlr3", "mlr3proba", "mlr3learners", "mlr3extralearners", "mlr3pipelines","survivalROC", "ggplot2" )
+res <- vapply(pkgs, function(pkg) {
   if (!require(pkg, character.only = TRUE)) install.packages(pkg)
   require(pkg, character.only = TRUE, quietly = TRUE)
 }, FUN.VALUE = logical(length = 1L))
@@ -35,7 +41,8 @@ options(show.signif.stars = FALSE)  # display statistical intelligence
 palette("Okabe-Ito")  # color-blind friendly  (needs R 4.0)
 
 
-#  ================== Load data
+## /* ----------- LOAD DATA -----------------*/
+
 #' # Load Data
 #'
 #'  Load preprocessed `rott5` and `gbsg5` data from an external `Rdata` file 
@@ -55,7 +62,7 @@ gbsg5b = gbsg5 %>% select(all_of(select_vars)) %>% mutate(trainx=0)
 combined_dt = as.data.table(bind_rows(rott5b, gbsg5b))
 print(combined_dt)
 
-#  ==================  Create (combined) task
+##   /* ==================  Create (combined) task  */
 #' #  Create task
 #'
 #' * Create survival task for `combined_dt` data table
@@ -75,82 +82,65 @@ train_indexes = which(combined_dt$trainx ==1)
 val_indexes  = which(combined_dt$trainx ==0)
 part = list(train = train_indexes, val = val_indexes, test= numeric(0))
 
-# Create task_train
-task_train = task$clone()
-task_train$filter(part$train)
-plot(task_train$kaplan())
 
-task_val   = task$clone()
-task_val$filter(part$val)
-rm(task)
+## /*  ======================== Model training ============= */
 
-#  ======================== Model training
 #' # Model training
 #'
-# Fit model
+#" ## Use `coxph()`
 
-#' Fit model using `"coxph()" (optional) 
-efit1 = coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
-efit1
+#' Fit model using `coxph()` directly. Included for illustration 
+(efit1 = coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5, x=T))
+
+#' x= FALSE, y=TRUE by default
+ph_efit1 = coxph(Surv(ryear, rfs) ~ csize + nodes2 + nodes3 + grade3, data = rott5)
+
 # rm(efit1)
 
 
-
-# --- Train learner on task `task`
- 
 #' ## Train learner
 #' 
 #' Train learner on training data
 
-learner = lrn("surv.coxph")
-learner$train(task_train, row_ids = part$train)
+cox = lrn("surv.coxph")
+cox$train(task, row_ids = part$train)
+cox
 
-learner$id     # Extract learner id. Ex. "surv.coxph"
-summary(learner$model)
+summary(cox$model)
 
-# Predict using the trained learner on the training task
-prediction_train = learner$predict(task_train)
+## /* ========== Prediction  ===================== */ 
 
-
-#========== Prediction: Use trained learner to create predictions using external task `task_e` 
-
-#' # Prediction external 
+#' # Prediction 
 #'
-#' Use trained learner on external task to create predictions in external task `task_e` 
-
-#' * Task for validation
-#' 
-#' Create survival task for (external) testing/validation
-
+#' Apply trained learner on external task to create predictions  
 
 # Create survival task for external validation data
 # plot(task_val$kaplan())
-
-
-
+plot(task$filter(rows= part$train)$kaplan())
 #' * Prediction
 
-prediction_val = learner$predict(task_val)  # prediction on validation task
+prediction_val = cox$predict(task,row_ids = part$val )  # prediction on validation data
 
-# ==================== Validation
+##  /* ==================== Validation */
 
 #' # Validation 
 #'
 #' Validation of the trained learner
 
-#  ------------
 #'
 #' ## Surv measures
 #'
 
 
-# ---- Discrimination
+## /* =========== Discrimination =========== */
+
 #'
 #' ## Discrimination
 
 
 #' * Recommended Concordance measures
  
+#' Make predictions for the validation set
 
 prediction_val$score(msrs(c("surv.rcll", "surv.cindex", "surv.dcalib")))
 
@@ -166,25 +156,25 @@ prediction_val$score(msrs(c("surv.rcll", "surv.cindex", "surv.dcalib")))
 I_cindex_measure = msr("surv.cindex", weight_meth = "I")
 prediction_val$score(I_cindex_measure)
 
-# (GH) Gonen and Heller's Concordance Index (only applicable to "surv.coxph" learner")
+# (GH) Gonen and Heller's Concordance Index (applicable only to "surv.coxph" learner")
 GH_cindex_measure = msr("surv.cindex", weight_meth = "GH")
 prediction_val$score(GH_cindex_measure)
 
 # (G) Weights concordance by 1/G.
 G_cindex_measure = msr("surv.cindex", weight_meth = "G")
-prediction_val$score(G_cindex_measure, task = task_val, train_set = part$train)
+prediction_val$score(G_cindex_measure, task = task, train_set = part$train)
 
 # (G2) Define Uno's C-index measure
 G2_cindex_measure = msr("surv.cindex", weight_meth = "G2")
-prediction_val$score(G2_cindex_measure, task = task_val, train_set = part$train)
+prediction_val$score(G2_cindex_measure, task = task, train_set = part$train)
 
 # (SG) Shemper et al C-index measure
 SG_cindex_measure = msr("surv.cindex", weight_meth = "SG")
-prediction_val$score(SG_cindex_measure, task = task_val, train_set = part$train)
+prediction_val$score(SG_cindex_measure, task = task, train_set = part$train)
 
 # (S) Weights concordance by S (Peto and Peto)
 S_cindex_measure = msr("surv.cindex", weight_meth = "S")
-prediction_val$score(S_cindex_measure, task = task_val, train_set = part$train)
+prediction_val$score(S_cindex_measure, task = task, train_set = part$train)
 
 
 
@@ -205,6 +195,7 @@ roc_result <-   timeROC::timeROC(
     times = time_values,
     iid = TRUE
   )
+roc_result
 plot(roc_result, time_values)
 
 #' Confidence intervals for areas under time-dependent ROC curves
@@ -226,7 +217,7 @@ survivalROC_helper <- function(t) {
                 marker       = prediction_val$crank,              # gbsg5$lp,
                 predict.time = t,
                 method       = "NNE",
-                span = 0.25 * task_val$nrow^(-0.20))            #nrow(gbsg5)
+                span = 0.25 * length(part$val)^(-0.20))            #nrow(gbsg5)
 }
 
 #' -- Evaluate every year:  1 through 5
@@ -309,13 +300,14 @@ vcal <- rms::cph(surv_object ~ rcs(pred.cll, 3),
                  x = T,
                  y = T,
                  surv = T,
-                 data = task_val$data()
+                 data = task$data(rows = part$val)                      # task_val$data()
 ) 
 
 tt  =  rms::survest(vcal, 
                  times = 5, 
-                 newdata = task_val$data())
-              
+                 newdata = task$data(rows = part$val)             # task_val$data())
+)
+
 # Create the DataFrame
 dat_cal <- data.frame(
   time     = tt$time,
@@ -396,51 +388,75 @@ calslope_summary <- c(
 )
 
 calslope_summary
-
+## calibration slope             2.5 %            97.5 % 
+##        1.0562040         0.8158872         1.2965207 
 
 
 
 #' ## Overall performance
 #'
-#'* `ph_efit1` does not work, `efit1x` is used
-#'* Cannot find function (S3-method) called predictRisk._coxph
-#'* Cannot find function (S3-method) called predictRisk.model_fit
+score_gbsg5 <-
+  riskRegression::Score(list("cox" = efit1),
+                        formula = Surv(ryear, rfs) ~ 1, 
+                        data = gbsg5, 
+                        conf.int = TRUE, 
+                        times = 4.99,
+                        cens.model = "km", 
+                        metrics = "brier",
+                        summary = "ipa"
+)
 
-#' ### Brier score (`efit1`)
+score_gbsg5$Brier$score 
 
-# score_gbsg5 <-
-#   riskRegression::Score(list("cox" = efit1),  # atg: `ph_efit1` does not work
-                       
+#        model times     Brier           se     lower     upper       IPA
+#       <fctr> <num>     <num>        <num>     <num>     <num>     <num>
+# 1: Null model  4.99 0.2499302 0.0004004949 0.2491452 0.2507151 0.0000000
+# 2:        cox  4.99 0.2247775 0.0078522559 0.2093874 0.2401677 0.1006387
 
+brier(efit1, 4.99, gbsg5)
 
-# score_gbsg5$Brier$score 
+#' `msr("surv.graf")` Calculates the Integrated Survival Brier Score (ISBS), Integrated Graf Score or squared survival loss.
 
-#score_gbsg5x <- score_gbsg5 # atg: copy saved for inspection
-# rm(score_gbsg5) 
+prediction_val$score(msrs(c("surv.graf", "surv.rcll", "surv.cindex", "surv.dcalib")))
+prediction_val$score(msr("surv.brier"))
 
-#' ### Brier score (`efit1_ph`)
+# ISBS, G(t) calculated using the validation set
+prediction_val$score(msr("surv.graf"))
+prediction_val$score(msr("surv.graf", times =4.99)) # matches the result above
 
-# 
-# colnames(lung_surv)
-# lung_surv %>% unnest(.pred) %>% colnames()
-
-surv_obj  <- with(gbsg5, Surv(ryear,rfs))
-pred_time <- predict(ph_efit1, gbsg5, type = "time")
-pred_surv <- predict(ph_efit1, gbsg5, type = "survival", eval_time = 4.99) 
-wght_cens <- tibble(.weight_censored = rep(1, nrow(gbsg5))) #Place holder
-
-
-surv_tbl  <- tibble (surv_obj = surv_obj)
-pred_res <- bind_cols(pred_surv, pred_time, surv_tbl)
-pred_res %>% unnest(.pred) %>% colnames()
-
-# pred_res %>% brier_survival(   # DOES not work
-#    truth = surv_obj,
-#    .pred
-#   )
-         
+# ISBS, G(t) calculated using the train set (always recommended)
+prediction_val$score(msr("surv.graf"), task = task, train_set = part$train)
 
 
+#| eval = FALSE
+# ISBS, ERV score (comparing with KM baseline)
+prediction_val$score(msr("surv.graf", ERV = TRUE), task = task, train_set = part$train)
+#| echo = FALSE
+cat(paste0('Error in UseMethod("create_empty_prediction_data") :',  
+  ' no applicable method for',  " 'create_empty_prediction_data' applied to an object of class",
+  "c('TaskSurv', 'TaskSupervised', 'Task', 'R6')"))
+
+
+# ISBS at specific time point
+# prediction_val$score(msr("surv.graf", times = 4.99), task = task, train_set = part$train)
+
+
+# ISBS at multiple time points (integrated)
+prediction_val$score(msr("surv.graf", times = c(1, 3, 5), integrated = TRUE),
+        task = task, train_set = part$train)
+
+# ISBS, use time cutoff
+prediction_val$score(msr("surv.graf", t_max = 700), task = task, train_set = part$train)
+
+# ISBS, use time cutoff and also remove observations
+prediction_val$score(msr("surv.graf", t_max = 700, remove_obs = TRUE),
+        task = task, train_set = part$train)
+
+# ISBS, use time cutoff corresponding to specific proportion of censoring on the test set
+prediction_val$score(msr("surv.graf", p_max = 0.8), task = task, train_set = part$train)
+
+# RISBS, G(t) calculated using the train set
+prediction_val$score(msr("surv.graf", proper = TRUE), task = task, train_set = part$train)
 
 #' ## Clinical utility
 
@@ -449,10 +465,15 @@ thresholds <- seq(0, 1.0, by = 0.01)
 
 # 2. Calculate observed risk for all patients exceeding threshold (i.e. treat-all)
 horizon <- 5
-survfit_all <- summary(
-  survfit(Surv(ryear, rfs) ~ 1, data = gbsg5), 
-  times = horizon
-)
+
+# survfit_all <- summary(
+#   survfit(Surv(ryear, rfs) ~ 1, data = gbsg5), 
+#   times = horizon
+# )
+
+surv_object = prediction_val$truth
+survfit_all = summary(survfit(surv_object ~1),  times = t_horizon)
+
 f_all <- 1 - survfit_all$surv
 print(f_all)
 
@@ -463,13 +484,19 @@ list_nb <- lapply(thresholds, function(ps) {
   NB_all <- f_all - (1 - f_all) * (ps / (1 - ps))
   
   # Based on threshold
-  p_exceed <- mean(gbsg5$pred > ps)
-  survfit_among_exceed <- try(
-    summary(
-      survfit(Surv(ryear, rfs) ~ 1, data = gbsg5[gbsg5$pred > ps, ]), 
-      times = horizon
-    ), silent = TRUE
+  p_exceed <- mean(1-survx > ps)    # mean(gbsg5$pred > ps)
+  # survfit_among_exceedx <- try(
+  #   summary(
+  #    survfit(Surv(ryear, rfs) ~ 1, data = gbsg5[1-survx > ps, ]),  # gbsg5$pred
+  #    times = horizon
+  #  ), silent = TRUE
+  # )
+ survfit_among_exceed <- try(
+     # srv_object =  prediction_val$truth[1-survx > ps, ]
+     summary(survfit(prediction_val$truth[1-survx > ps, ] ~1), times= horizon
+     ), silent=TRUE
   )
+
   
   # If a) no more observations above threshold, or b) among subset exceeding..
   # ..no indiv has event time >= horizon, then NB = 0
@@ -481,7 +508,10 @@ list_nb <- lapply(thresholds, function(ps) {
     FP <- (1 - f_given_exceed) * p_exceed
     NB <- TP - FP * (ps / (1 - ps))
   }
-  
+  #print(c(threshold = ps))
+  #print(c(NB= NB))
+  #print(c(All = NB_all))
+  if (length(NB) == 0) NB =0
   # Return together
   df_res <- data.frame("threshold" = ps, "NB" = NB, "treat_all" = NB_all)
   return(df_res)
@@ -546,5 +576,6 @@ legend("topright",
 )
 title("Validation data")
 #
+
 #+ chunk-exit
 knitr::knit_exit()
